@@ -60,5 +60,9 @@ VALUES (1, 'fahrenheit', 'mixed');
 
 -- Indexes for better performance
 CREATE INDEX IF NOT EXISTS idx_clothing_type ON clothing_items(type);
+CREATE INDEX IF NOT EXISTS idx_clothing_formality ON clothing_items(formality_level);
+CREATE INDEX IF NOT EXISTS idx_clothing_warmth ON clothing_items(warmth_rating);
+CREATE INDEX IF NOT EXISTS idx_clothing_color ON clothing_items(color);
+CREATE INDEX IF NOT EXISTS idx_clothing_type_formality ON clothing_items(type, formality_level);
 CREATE INDEX IF NOT EXISTS idx_outfit_logs_date ON outfit_logs(worn_date);
 CREATE INDEX IF NOT EXISTS idx_outfit_logs_outfit_id ON outfit_logs(outfit_id);
