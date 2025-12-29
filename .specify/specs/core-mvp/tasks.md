@@ -123,18 +123,18 @@
 
 Use `/spec:sync core-mvp` to create GitHub issues from waves.
 
-| Wave | Issue | Status |
-|------|-------|--------|
-| Wave 1: Project Setup & Foundation | #TBD | Not synced |
-| Wave 2: Wardrobe Management - Backend | #TBD | Not synced |
-| Wave 3: Wardrobe Management - Frontend | #TBD | Not synced |
-| Wave 4: Weather Integration | #TBD | Not synced |
-| Wave 5: Outfit Generation Algorithm | #TBD | Not synced |
-| Wave 6: Outfit Suggestions - API & UI | #TBD | Not synced |
-| Wave 7: Outfit History & Logging | #TBD | Not synced |
-| Wave 8: User Preferences & Settings | #TBD | Not synced |
-| Wave 9: Navigation & Polish | #TBD | Not synced |
-| Wave 10: Testing & Deployment | #TBD | Not synced |
+| Wave | Tasks | Issue | Status |
+|------|-------|-------|--------|
+| Wave 1: Project Setup & Foundation | T001-T008 | [#1](https://github.com/cmaec22/virtual-closet/issues/1) | open |
+| Wave 2: Wardrobe Management - Backend | T009-T016 | [#2](https://github.com/cmaec22/virtual-closet/issues/2) | open |
+| Wave 3: Wardrobe Management - Frontend | T017-T025 | [#3](https://github.com/cmaec22/virtual-closet/issues/3) | open |
+| Wave 4: Weather Integration | T026-T032 | [#4](https://github.com/cmaec22/virtual-closet/issues/4) | open |
+| Wave 5: Outfit Generation Algorithm | T033-T040 | [#5](https://github.com/cmaec22/virtual-closet/issues/5) | open |
+| Wave 6: Outfit Suggestions - API & UI | T041-T048 | [#6](https://github.com/cmaec22/virtual-closet/issues/6) | open |
+| Wave 7: Outfit History & Logging | T049-T056 | [#7](https://github.com/cmaec22/virtual-closet/issues/7) | open |
+| Wave 8: User Preferences & Settings | T057-T064 | [#8](https://github.com/cmaec22/virtual-closet/issues/8) | open |
+| Wave 9: Navigation & Polish | T065-T072 | [#9](https://github.com/cmaec22/virtual-closet/issues/9) | open |
+| Wave 10: Testing & Deployment | T073-T082 | [#10](https://github.com/cmaec22/virtual-closet/issues/10) | open |
 
 ---
 
