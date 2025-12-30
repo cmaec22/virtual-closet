@@ -14,13 +14,13 @@ export const dynamic = 'force-dynamic'; // Disable caching for weather data
  * - latitude (number): Latitude coordinate
  * - longitude (number): Longitude coordinate
  * OR
- * - city (string): City name (e.g., "New York" or "London, UK")
+ * - city (string): City name (e.g., "Toronto" or "London, UK")
  *
- * - units (optional): Temperature unit - 'fahrenheit' or 'celsius' (default: fahrenheit)
+ * - units (optional): Temperature unit - 'fahrenheit' or 'celsius' (default: celsius)
  *
  * Examples:
- * - /api/weather?latitude=40.7128&longitude=-74.0060
- * - /api/weather?city=New York&units=fahrenheit
+ * - /api/weather?latitude=43.65107&longitude=-79.347015
+ * - /api/weather?city=Toronto&units=celsius
  */
 export async function GET(request: NextRequest) {
   try {
@@ -28,7 +28,7 @@ export async function GET(request: NextRequest) {
     const city = searchParams.get('city');
     const latParam = searchParams.get('latitude');
     const lonParam = searchParams.get('longitude');
-    const units = (searchParams.get('units') || 'fahrenheit') as TemperatureUnit;
+    const units = (searchParams.get('units') || 'celsius') as TemperatureUnit;
 
     // Validate units parameter
     if (units !== 'fahrenheit' && units !== 'celsius') {
@@ -93,8 +93,8 @@ export async function GET(request: NextRequest) {
           error: 'Missing required parameters',
           details: 'Provide either "city" or both "latitude" and "longitude"',
           examples: [
-            '/api/weather?city=New York',
-            '/api/weather?latitude=40.7128&longitude=-74.0060',
+            '/api/weather?city=Toronto',
+            '/api/weather?latitude=43.65107&longitude=-79.347015',
           ],
         },
         { status: 400 }

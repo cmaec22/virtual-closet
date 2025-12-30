@@ -1,8 +1,8 @@
 import WeatherWidget from '@/components/shared/WeatherWidget';
 
 export default function Home() {
-  const defaultCity = process.env.NEXT_PUBLIC_DEFAULT_CITY || 'New York';
-  const temperatureUnit = (process.env.NEXT_PUBLIC_TEMPERATURE_UNIT || 'fahrenheit') as 'fahrenheit' | 'celsius';
+  const defaultCity = process.env.NEXT_PUBLIC_DEFAULT_CITY || 'Toronto';
+  const temperatureUnit = (process.env.NEXT_PUBLIC_TEMPERATURE_UNIT || 'celsius') as 'fahrenheit' | 'celsius';
 
   return (
     <main className="min-h-screen p-8">

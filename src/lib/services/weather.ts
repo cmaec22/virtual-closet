@@ -61,7 +61,7 @@ function getCacheKey(latitude: number, longitude: number): string {
 export async function fetchWeather(
   latitude: number,
   longitude: number,
-  temperatureUnit: TemperatureUnit = 'fahrenheit'
+  temperatureUnit: TemperatureUnit = 'celsius'
 ): Promise<WeatherData> {
   const cacheKey = getCacheKey(latitude, longitude);
 

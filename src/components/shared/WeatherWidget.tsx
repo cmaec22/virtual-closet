@@ -24,7 +24,7 @@ export default function WeatherWidget({
   city,
   latitude,
   longitude,
-  units = 'fahrenheit',
+  units = 'celsius',
   className = '',
 }: WeatherWidgetProps) {
   const [weather, setWeather] = useState<WeatherData | null>(null);
