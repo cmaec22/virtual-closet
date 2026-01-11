@@ -100,7 +100,7 @@ export async function generateOutfitSuggestions(
   );
 
   // Step 6: Select 3 diverse suggestions with randomization (T040)
-  const suggestions = selectTopSuggestions(scoredOutfits, 3);
+  const suggestions = selectTopSuggestions(scoredOutfits, 3, weather);
 
   return suggestions;
 }
@@ -113,9 +113,29 @@ export async function generateOutfitSuggestions(
  * Fetch all clothing items from the wardrobe
  */
 async function fetchWardrobeItems(): Promise<ClothingItem[]> {
-  // TODO: Implement database query
-  // Query: SELECT * FROM clothing_items ORDER BY created_at DESC
-  return [];
+  const db = getDatabase();
+
+  const rows = db.prepare(`
+    SELECT
+      id,
+      name,
+      type,
+      color,
+      warmth_rating,
+      formality_level,
+      image_path,
+      tags,
+      created_at,
+      updated_at
+    FROM clothing_items
+    ORDER BY created_at DESC
+  `).all();
+
+  // Parse tags from JSON string
+  return rows.map((row: any) => ({
+    ...row,
+    tags: row.tags ? JSON.parse(row.tags) : [],
+  }));
 }
 
 /**
@@ -124,13 +144,59 @@ async function fetchWardrobeItems(): Promise<ClothingItem[]> {
  * @returns Sets of item IDs worn in last 2 days and last 7 days
  */
 async function fetchRecentlyWornItems(): Promise<RecentlyWornItems> {
-  // TODO: Implement database query
-  // Query outfit_logs for items worn in last 7 days
-  // Separate into two buckets: last 2 days (exclude) and 3-7 days (penalize)
+  const db = getDatabase();
+
+  // Calculate date thresholds
+  const now = new Date();
+  const twoDaysAgo = new Date(now);
+  twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+
+  const sevenDaysAgo = new Date(now);
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+  // Query outfit logs with outfit details from last 7 days
+  const logs = db.prepare(`
+    SELECT
+      ol.worn_date,
+      o.top_id,
+      o.bottom_id,
+      o.shoes_id,
+      o.outerwear_id,
+      o.accessory_id
+    FROM outfit_logs ol
+    INNER JOIN outfits o ON ol.outfit_id = o.id
+    WHERE ol.worn_date >= ?
+    ORDER BY ol.worn_date DESC
+  `).all(sevenDaysAgo.toISOString().split('T')[0]);
+
+  const lastTwoDays = new Set<number>();
+  const lastSevenDays = new Set<number>();
+
+  // Process each logged outfit
+  for (const log of logs) {
+    const logData = log as any;
+    const wornDate = new Date(logData.worn_date);
+    const itemIds = [
+      logData.top_id,
+      logData.bottom_id,
+      logData.shoes_id,
+      logData.outerwear_id,
+      logData.accessory_id,
+    ].filter((id): id is number => id !== null && id !== undefined);
+
+    // Categorize by how recently worn
+    if (wornDate >= twoDaysAgo) {
+      // Worn in last 2 days - exclude completely
+      itemIds.forEach(id => lastTwoDays.add(id));
+    } else {
+      // Worn 3-7 days ago - penalize in scoring
+      itemIds.forEach(id => lastSevenDays.add(id));
+    }
+  }
 
   return {
-    lastTwoDays: new Set<number>(),
-    lastSevenDays: new Set<number>(),
+    lastTwoDays,
+    lastSevenDays,
   };
 }
 
@@ -176,8 +242,24 @@ function isFormalityCompatible(
   itemFormality: FormalityLevel,
   preferredFormality: FormalityLevel
 ): boolean {
-  // TODO: Implement formality matching logic
-  return true;
+  // Exact match is always compatible
+  if (itemFormality === preferredFormality) {
+    return true;
+  }
+
+  // Define formality hierarchy (0 = casual, 1 = business_casual, 2 = formal)
+  const formalityLevels: Record<FormalityLevel, number> = {
+    casual: 0,
+    business_casual: 1,
+    formal: 2,
+  };
+
+  const itemLevel = formalityLevels[itemFormality];
+  const preferredLevel = formalityLevels[preferredFormality];
+
+  // Compatible if within 1 level
+  const levelDifference = Math.abs(itemLevel - preferredLevel);
+  return levelDifference <= 1;
 }
 
 /**
@@ -186,10 +268,47 @@ function isFormalityCompatible(
  * Considers temperature and precipitation
  */
 function isWeatherAppropriate(item: ClothingItem, weather: WeatherData): boolean {
-  // TODO: Implement weather matching logic
-  // Check warmth_rating against temperature
-  // Consider precipitation for waterproof items
-  return true;
+  const temp = weather.temperature;
+  const warmth = item.warmth_rating;
+
+  // Define temperature ranges for each warmth rating
+  // warmth_rating: 1 (light) to 5 (very warm)
+  //
+  // Temperature ranges (Fahrenheit):
+  // 1 (light): 75°F+ (summer, t-shirts, shorts)
+  // 2 (moderate-light): 65-85°F (spring/fall light layers)
+  // 3 (moderate): 50-70°F (mid-season, long sleeves)
+  // 4 (warm): 35-55°F (cool weather, sweaters)
+  // 5 (very warm): <50°F (winter, heavy coats)
+
+  const tempRanges: Record<number, { min: number; max: number }> = {
+    1: { min: 75, max: 120 }, // Light (hot weather)
+    2: { min: 65, max: 85 },  // Moderate-light
+    3: { min: 50, max: 70 },  // Moderate
+    4: { min: 35, max: 55 },  // Warm
+    5: { min: -20, max: 50 }, // Very warm (cold weather)
+  };
+
+  const range = tempRanges[warmth];
+  if (!range) {
+    return true; // Unknown warmth rating, allow it
+  }
+
+  // Allow items if temperature is within ±10°F of their ideal range
+  // This provides flexibility (e.g., a warmth-3 item works from 40-80°F)
+  const tolerance = 10;
+  const isTemperatureAppropriate =
+    temp >= range.min - tolerance && temp <= range.max + tolerance;
+
+  // Special case: For precipitation, prefer items with water-related tags
+  // (This is a basic implementation - could be enhanced with waterproof flags)
+  if (weather.condition === 'rain' || weather.condition === 'snow') {
+    // Outerwear should ideally have rain/waterproof tags for wet conditions
+    // But we won't exclude items here - just score them differently
+    return isTemperatureAppropriate;
+  }
+
+  return isTemperatureAppropriate;
 }
 
 /**
@@ -198,9 +317,43 @@ function isWeatherAppropriate(item: ClothingItem, weather: WeatherData): boolean
  * Basic filtering based on temperature ranges
  */
 function isSeasonAppropriate(item: ClothingItem, weather: WeatherData): boolean {
-  // TODO: Implement season-appropriate filtering
-  // Map temperature to season, check item compatibility
-  return true;
+  const temp = weather.temperature;
+
+  // Derive season from temperature (Fahrenheit)
+  type Season = 'summer' | 'spring' | 'fall' | 'winter';
+
+  let season: Season;
+  if (temp >= 75) {
+    season = 'summer';
+  } else if (temp >= 60) {
+    season = 'spring'; // or fall
+  } else if (temp >= 45) {
+    season = 'fall';
+  } else {
+    season = 'winter';
+  }
+
+  // Check if item has season-related tags
+  const itemTags = item.tags.map(tag => tag.toLowerCase());
+  const hasSeasonTag = itemTags.some(tag =>
+    ['summer', 'spring', 'fall', 'winter', 'all-season', 'year-round'].includes(tag)
+  );
+
+  // If item has no season tags, allow it (neutral item)
+  if (!hasSeasonTag) {
+    return true;
+  }
+
+  // If item has season tags, check compatibility
+  const seasonCompatibility: Record<Season, string[]> = {
+    summer: ['summer', 'spring', 'all-season', 'year-round'],
+    spring: ['spring', 'summer', 'fall', 'all-season', 'year-round'],
+    fall: ['fall', 'spring', 'winter', 'all-season', 'year-round'],
+    winter: ['winter', 'fall', 'all-season', 'year-round'],
+  };
+
+  const compatibleSeasons = seasonCompatibility[season];
+  return itemTags.some(tag => compatibleSeasons.includes(tag));
 }
 
 // ============================================================================
@@ -216,12 +369,114 @@ function generateOutfitCandidates(
   items: ClothingItem[],
   weather: WeatherData
 ): OutfitCandidate[] {
-  // TODO: Implement combination generation
   // Group items by type
-  // Generate all valid combinations
-  // Consider outerwear requirement based on weather
+  const grouped = groupItemsByType(items);
 
-  return [];
+  const candidates: OutfitCandidate[] = [];
+
+  // Determine if outerwear is required based on weather
+  const requireOuterwear = weather.temperature < 50; // Require outerwear below 50°F
+
+  // Generate all combinations
+  // Core outfit: top + bottom + shoes (required)
+  // Optional: outerwear, accessory
+
+  const tops = grouped.top.length > 0 ? grouped.top : [null];
+  const bottoms = grouped.bottom.length > 0 ? grouped.bottom : [null];
+  const shoes = grouped.shoes.length > 0 ? grouped.shoes : [null];
+  const outerwears = grouped.outerwear.length > 0 ? grouped.outerwear : [null];
+  const accessories = grouped.accessory.length > 0 ? grouped.accessory : [null];
+
+  // Generate combinations
+  for (const top of tops) {
+    for (const bottom of bottoms) {
+      for (const shoe of shoes) {
+        // Skip if missing core items
+        if (!top || !bottom || !shoe) {
+          continue;
+        }
+
+        // If outerwear is required, generate combinations with each outerwear
+        if (requireOuterwear && outerwears.length > 0 && outerwears[0] !== null) {
+          for (const outerwear of outerwears) {
+            if (!outerwear) continue;
+
+            // With and without accessory
+            candidates.push({
+              top,
+              bottom,
+              shoes: shoe,
+              outerwear,
+              accessory: null,
+            });
+
+            for (const accessory of accessories) {
+              if (accessory) {
+                candidates.push({
+                  top,
+                  bottom,
+                  shoes: shoe,
+                  outerwear,
+                  accessory,
+                });
+              }
+            }
+          }
+        } else {
+          // Outerwear not required - generate with and without
+          // Without outerwear
+          candidates.push({
+            top,
+            bottom,
+            shoes: shoe,
+            outerwear: null,
+            accessory: null,
+          });
+
+          // Without outerwear, with accessory
+          for (const accessory of accessories) {
+            if (accessory) {
+              candidates.push({
+                top,
+                bottom,
+                shoes: shoe,
+                outerwear: null,
+                accessory,
+              });
+            }
+          }
+
+          // With outerwear (optional)
+          for (const outerwear of outerwears) {
+            if (!outerwear) continue;
+
+            candidates.push({
+              top,
+              bottom,
+              shoes: shoe,
+              outerwear,
+              accessory: null,
+            });
+
+            // With both outerwear and accessory
+            for (const accessory of accessories) {
+              if (accessory) {
+                candidates.push({
+                  top,
+                  bottom,
+                  shoes: shoe,
+                  outerwear,
+                  accessory,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return candidates;
 }
 
 /**
@@ -287,10 +542,64 @@ function scoreOutfit(
  * T035: Score weather appropriateness (0-30 points)
  */
 function scoreWeatherMatch(candidate: OutfitCandidate, weather: WeatherData): number {
-  // TODO: Implement weather scoring
-  // Check warmth ratings vs temperature
-  // Check precipitation handling
-  return 0;
+  const temp = weather.temperature;
+  const allItems = [
+    candidate.top,
+    candidate.bottom,
+    candidate.shoes,
+    candidate.outerwear,
+    candidate.accessory,
+  ].filter((item): item is ClothingItem => item !== null);
+
+  if (allItems.length === 0) {
+    return 0;
+  }
+
+  // Calculate average warmth rating of outfit
+  const totalWarmth = allItems.reduce((sum, item) => sum + item.warmth_rating, 0);
+  const avgWarmth = totalWarmth / allItems.length;
+
+  // Ideal warmth for temperature
+  // Temperature ranges (Fahrenheit) -> ideal warmth:
+  // 75°F+: warmth 1-2 (light)
+  // 60-75°F: warmth 2-3 (moderate-light)
+  // 45-60°F: warmth 3-4 (moderate-warm)
+  // < 45°F: warmth 4-5 (warm-very warm)
+
+  let idealWarmth: number;
+  if (temp >= 75) {
+    idealWarmth = 1.5;
+  } else if (temp >= 60) {
+    idealWarmth = 2.5;
+  } else if (temp >= 45) {
+    idealWarmth = 3.5;
+  } else {
+    idealWarmth = 4.5;
+  }
+
+  // Score based on how close to ideal warmth
+  const warmthDiff = Math.abs(avgWarmth - idealWarmth);
+  let weatherScore = 30 - warmthDiff * 6; // Lose 6 points per warmth level off
+
+  // Bonus: Has outerwear when cold
+  if (temp < 50 && candidate.outerwear !== null) {
+    weatherScore += 5;
+  }
+
+  // Bonus: Waterproof items in rain/snow
+  if (weather.condition === 'rain' || weather.condition === 'snow') {
+    const hasWaterproofTags = allItems.some(item =>
+      item.tags.some(tag =>
+        ['waterproof', 'rain', 'water-resistant'].includes(tag.toLowerCase())
+      )
+    );
+    if (hasWaterproofTags) {
+      weatherScore += 5;
+    }
+  }
+
+  // Cap between 0 and 30
+  return Math.max(0, Math.min(30, weatherScore));
 }
 
 /**
@@ -300,22 +609,138 @@ function scoreFormalityMatch(
   candidate: OutfitCandidate,
   preference: FormalityLevel
 ): number {
-  // TODO: Implement formality scoring
-  // Perfect match = 25 points
-  // Within 1 level = 15 points
-  // Mismatched = 0 points
-  return 0;
+  const formalityLevels: Record<FormalityLevel, number> = {
+    casual: 0,
+    business_casual: 1,
+    formal: 2,
+  };
+
+  const preferredLevel = formalityLevels[preference];
+
+  // Get formality levels of all items in outfit
+  const allItems = [
+    candidate.top,
+    candidate.bottom,
+    candidate.shoes,
+    candidate.outerwear,
+    candidate.accessory,
+  ].filter((item): item is ClothingItem => item !== null);
+
+  if (allItems.length === 0) {
+    return 0;
+  }
+
+  // Calculate how well each item matches the preference
+  let totalScore = 0;
+  for (const item of allItems) {
+    const itemLevel = formalityLevels[item.formality_level];
+    const levelDiff = Math.abs(itemLevel - preferredLevel);
+
+    if (levelDiff === 0) {
+      totalScore += 25; // Perfect match
+    } else if (levelDiff === 1) {
+      totalScore += 15; // Within 1 level
+    } else {
+      totalScore += 0; // Too far off
+    }
+  }
+
+  // Average the scores across all items
+  const avgScore = totalScore / allItems.length;
+
+  // Also check consistency within the outfit
+  // Penalize if items have very different formality levels
+  const formalityVariance = Math.max(...allItems.map(item => formalityLevels[item.formality_level])) -
+    Math.min(...allItems.map(item => formalityLevels[item.formality_level]));
+
+  let consistencyPenalty = 0;
+  if (formalityVariance > 1) {
+    consistencyPenalty = 5; // Mixing casual with formal
+  }
+
+  return Math.max(0, Math.min(25, avgScore - consistencyPenalty));
 }
 
 /**
  * T037: Score color coordination (0-20 points)
  */
 function scoreColorCoordination(candidate: OutfitCandidate): number {
-  // TODO: Implement color coordination scoring
-  // Neutrals with anything = high score
-  // Complementary colors = high score
-  // Clashing colors = low score
-  return 0;
+  // Define neutral colors (always score well)
+  const neutrals = ['black', 'white', 'gray', 'grey', 'beige', 'tan', 'brown', 'navy', 'cream'];
+
+  // Define complementary color pairs (score bonus)
+  const complementaryPairs = [
+    ['blue', 'orange'],
+    ['red', 'green'],
+    ['yellow', 'purple'],
+    ['pink', 'green'],
+    ['navy', 'white'],
+    ['black', 'white'],
+  ];
+
+  // Define clashing combinations (score penalty)
+  const clashingPairs = [
+    ['brown', 'black'],
+    ['navy', 'black'],
+    ['red', 'pink'],
+  ];
+
+  // Collect all colors from the outfit (excluding null items)
+  const outfitColors = [
+    candidate.top?.color,
+    candidate.bottom?.color,
+    candidate.shoes?.color,
+    candidate.outerwear?.color,
+    candidate.accessory?.color,
+  ]
+    .filter((color): color is string => color !== null && color !== undefined)
+    .map(color => color.toLowerCase());
+
+  if (outfitColors.length === 0) {
+    return 10; // Neutral score if no colors
+  }
+
+  // Count neutrals in outfit
+  const neutralCount = outfitColors.filter(color =>
+    neutrals.some(neutral => color.includes(neutral))
+  ).length;
+
+  // Start with base score
+  let score = 10;
+
+  // Bonus: All neutrals or mostly neutrals (always safe)
+  if (neutralCount === outfitColors.length) {
+    score += 8; // Very safe combination
+  } else if (neutralCount >= outfitColors.length - 1) {
+    score += 6; // One accent color with neutrals
+  }
+
+  // Check for complementary colors
+  for (const [color1, color2] of complementaryPairs) {
+    const hasColor1 = outfitColors.some(c => c.includes(color1));
+    const hasColor2 = outfitColors.some(c => c.includes(color2));
+    if (hasColor1 && hasColor2) {
+      score += 4; // Complementary pair bonus
+    }
+  }
+
+  // Penalty for clashing colors
+  for (const [color1, color2] of clashingPairs) {
+    const hasColor1 = outfitColors.some(c => c.includes(color1));
+    const hasColor2 = outfitColors.some(c => c.includes(color2));
+    if (hasColor1 && hasColor2) {
+      score -= 5; // Clashing penalty
+    }
+  }
+
+  // Penalty for too many non-neutral colors (looks busy)
+  const nonNeutralCount = outfitColors.length - neutralCount;
+  if (nonNeutralCount > 2) {
+    score -= 3; // Too colorful penalty
+  }
+
+  // Cap score between 0 and 20
+  return Math.max(0, Math.min(20, score));
 }
 
 /**
@@ -325,11 +750,36 @@ function scoreFreshness(
   candidate: OutfitCandidate,
   recentlyWorn: RecentlyWornItems
 ): number {
-  // TODO: Implement freshness scoring
-  // Items worn in last 2 days: return 0 (exclude outfit)
-  // Items worn in 3-7 days: penalize by 50%
-  // Fresh items: full points
-  return 0;
+  const outfitItemIds = getOutfitItemIds(candidate);
+
+  // Check if any items were worn in last 2 days (hard exclude)
+  for (const itemId of outfitItemIds) {
+    if (recentlyWorn.lastTwoDays.has(itemId)) {
+      return 0; // Exclude this outfit completely
+    }
+  }
+
+  // Count items worn in last 3-7 days (soft penalty)
+  let itemsWornRecently = 0;
+  for (const itemId of outfitItemIds) {
+    if (recentlyWorn.lastSevenDays.has(itemId)) {
+      itemsWornRecently++;
+    }
+  }
+
+  // Calculate freshness score
+  // - No recent items: 25 points (fresh outfit)
+  // - 1 recent item: 15 points (somewhat fresh)
+  // - 2+ recent items: 5 points (not very fresh)
+  if (itemsWornRecently === 0) {
+    return 25; // Completely fresh
+  } else if (itemsWornRecently === 1) {
+    return 15; // Mostly fresh
+  } else if (itemsWornRecently === 2) {
+    return 8; // Somewhat stale
+  } else {
+    return 5; // Very stale (but not excluded)
+  }
 }
 
 // ============================================================================
@@ -346,28 +796,145 @@ function scoreFreshness(
  */
 function selectTopSuggestions(
   scoredOutfits: ScoredOutfit[],
-  count: number
+  count: number,
+  weather: WeatherData
 ): OutfitSuggestion[] {
-  // TODO: Implement smart selection algorithm
-  // 1. Sort by score
-  // 2. Take top 20 candidates
-  // 3. Randomly select 'count' with diversity constraints
-  // 4. Generate reason for each selection
+  // Filter out any outfits with score 0 (freshness exclusion)
+  const validOutfits = scoredOutfits.filter(outfit => outfit.score > 0);
 
-  return [];
+  if (validOutfits.length === 0) {
+    return []; // No valid outfits
+  }
+
+  // Sort by score (descending)
+  validOutfits.sort((a, b) => b.score - a.score);
+
+  // Take top candidates (up to 20 or all if less)
+  const topCandidates = validOutfits.slice(0, Math.min(20, validOutfits.length));
+
+  // Select 'count' suggestions ensuring no item repeats
+  const suggestions: OutfitSuggestion[] = [];
+  const usedItemIds = new Set<number>();
+
+  // Strategy: Pick highest scoring non-conflicting outfits
+  for (const scoredOutfit of topCandidates) {
+    if (suggestions.length >= count) {
+      break;
+    }
+
+    const candidateItemIds = getOutfitItemIds(scoredOutfit.candidate);
+
+    // Check if this outfit shares any items with already selected suggestions
+    const hasConflict = candidateItemIds.some(id => usedItemIds.has(id));
+
+    if (!hasConflict) {
+      // Add this suggestion
+      suggestions.push({
+        outfit: candidateToOutfitWithItems(scoredOutfit.candidate),
+        score: scoredOutfit.score,
+        reason: generateReason(scoredOutfit, weather),
+      });
+
+      // Mark these items as used
+      candidateItemIds.forEach(id => usedItemIds.add(id));
+    }
+  }
+
+  // If we couldn't get enough diverse suggestions, fill with top scoring (even with repeats)
+  if (suggestions.length < count && topCandidates.length > suggestions.length) {
+    for (const scoredOutfit of topCandidates) {
+      if (suggestions.length >= count) {
+        break;
+      }
+
+      // Check if this exact outfit was already added
+      const alreadyAdded = suggestions.some(
+        s => s.outfit.top_id === scoredOutfit.candidate.top?.id &&
+             s.outfit.bottom_id === scoredOutfit.candidate.bottom?.id &&
+             s.outfit.shoes_id === scoredOutfit.candidate.shoes?.id
+      );
+
+      if (!alreadyAdded) {
+        suggestions.push({
+          outfit: candidateToOutfitWithItems(scoredOutfit.candidate),
+          score: scoredOutfit.score,
+          reason: generateReason(scoredOutfit, weather),
+        });
+      }
+    }
+  }
+
+  return suggestions;
 }
 
 /**
  * Generate human-readable reason for outfit suggestion
  */
 function generateReason(scored: ScoredOutfit, weather: WeatherData): string {
-  // TODO: Generate reason based on highest scoring factors
-  // Examples:
-  // - "Perfect for rainy weather"
-  // - "Great for business casual"
-  // - "Fresh combination - not worn recently"
+  const { breakdown } = scored;
 
-  return 'Great outfit for today';
+  // Determine the strongest factor (highest score component)
+  const factors = [
+    { name: 'weather', score: breakdown.weatherScore, max: 30 },
+    { name: 'formality', score: breakdown.formalityScore, max: 25 },
+    { name: 'freshness', score: breakdown.freshnessScore, max: 25 },
+    { name: 'color', score: breakdown.colorScore, max: 20 },
+  ];
+
+  // Normalize scores as percentages
+  factors.forEach(f => {
+    f.score = (f.score / f.max) * 100;
+  });
+
+  // Sort by normalized score
+  factors.sort((a, b) => b.score - a.score);
+
+  // Build reason based on top factors
+  const reasons: string[] = [];
+
+  // Weather-based reasons
+  if (factors[0].name === 'weather' && breakdown.weatherScore >= 25) {
+    if (weather.temperature < 45) {
+      reasons.push('Perfect for cold weather');
+    } else if (weather.temperature > 75) {
+      reasons.push('Ideal for warm weather');
+    } else {
+      reasons.push('Great for today\'s temperature');
+    }
+
+    if (weather.condition === 'rain') {
+      reasons.push('good for rainy conditions');
+    }
+  }
+
+  // Formality reasons
+  if (breakdown.formalityScore >= 20) {
+    reasons.push('matches your formality preference');
+  }
+
+  // Freshness reasons
+  if (breakdown.freshnessScore === 25) {
+    reasons.push('fresh combination - not worn recently');
+  } else if (breakdown.freshnessScore >= 15) {
+    reasons.push('relatively fresh outfit');
+  }
+
+  // Color coordination reasons
+  if (breakdown.colorScore >= 18) {
+    reasons.push('excellent color coordination');
+  } else if (breakdown.colorScore >= 15) {
+    reasons.push('well-coordinated colors');
+  }
+
+  // Combine reasons
+  if (reasons.length === 0) {
+    return 'Good outfit for today';
+  } else if (reasons.length === 1) {
+    return reasons[0].charAt(0).toUpperCase() + reasons[0].slice(1);
+  } else {
+    const firstReason = reasons[0].charAt(0).toUpperCase() + reasons[0].slice(1);
+    return `${firstReason}, ${reasons.slice(1).join(', ')}`;
+  }
 }
 
 /**
